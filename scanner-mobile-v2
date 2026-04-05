@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>手机端扫码识别</title>
+  <style>
+    body, html {
+      margin: 0; padding: 0;
+      width: 100%; height: 100%;
+      overflow: hidden;
+      font-family: Arial, sans-serif;
+      background: black;
+    }
+    #video {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+    }
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      pointer-events: none;
+    }
+    #scanArea {
+      position: absolute;
+      top: 20%; left: 50%;
+      width: 300px; height: 300px;
+      margin-left: -150px;
+      border: 2px solid #00ff00;
+      box-shadow: 0 0 20px rgba(0,255,0,0.8);
+    }
+    #overlay::before {
+      content: "";
+      position: absolute;
+      top: 20%; left: 50%;
+      width: 300px; height: 300px;
+      margin-left: -150px;
+      background: transparent;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
+    }
+    #controls {
+      position: absolute;
+      bottom: 10px; left: 50%;
+      transform: translateX(-50%);
+      display: flex; gap: 8px;
+      z-index: 10;
+    }
+    button {
+      padding: 10px 16px;
+      font-size: 16px;
+    }
+    #resultsTable {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: white;
+      font-size: 12px;
+      max-width: 90%;
+      z-index: 10;
+    }
+    td, th { border: 1px solid #ddd; padding: 4px; }
+    table { border-collapse: collapse; }
+  </style>
+</head>
+<body>
+  <video id="video" autoplay muted playsinline></video>
+  <div id="overlay">
+    <div id="scanArea"></div>
+  </div>
+
+  <div id="controls">
+    <button id="startBtn">开始</button>
+    <button id="stopBtn">停止</button>
+  </div>
+
+  <table id="resultsTable">
+    <thead><tr><th>时间</th><th>类型</th><th>内容</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.19.1/umd/index.min.js"></script>
+  <script>
+    const videoElem = document.getElementById('video');
+    const tbody = document.querySelector('#resultsTable tbody');
+    let codeReader = null, stream = null;
+    const seen = new Set();
+
+    // 正常提示音
+    function beep() {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 1000;
+      gain.gain.value = 0.2;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+    }
+
+    // 错误提示音
+    function errorBeep() {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = 400;
+      gain.gain.value = 0.3;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.4);
+    }
+
+    // 语音提示
+    function speakMessage(msg) {
+      const utter = new SpeechSynthesisUtterance(msg);
+      utter.lang = "zh-CN";
+      utter.rate = 1.2;
+      speechSynthesis.speak(utter);
+    }
+
+    function handleResult(text, format) {
+      const key = format + "|" + text;
+      if (seen.has(key)) {
+        // 重复识别
+        errorBeep();
+        speakMessage("重复码");
+        return;
+      }
+      seen.add(key);
+
+      // 第一次识别
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${new Date().toLocaleString()}</td><td>${format}</td><td>${text}</td>`;
+      tbody.prepend(tr);
+
+      beep();
+      speakMessage("识别成功，内容：" + text);
+      console.log("识别到:", format, text);
+    }
+
+    async function startScanner() {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: "environment" } }
+      });
+      videoElem.srcObject = stream;
+
+      codeReader = new ZXing.BrowserMultiFormatReader();
+      const boxSize = 300;
+
+      function scanFrame() {
+        if (videoElem.readyState === videoElem.HAVE_ENOUGH_DATA) {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const { videoWidth, videoHeight } = videoElem;
+
+          const x = (videoWidth - boxSize) / 2;
+          const y = videoHeight * 0.2;
+
+          canvas.width = boxSize;
+          canvas.height = boxSize;
+          ctx.drawImage(videoElem, x, y, boxSize, boxSize, 0, 0, boxSize, boxSize);
+
+          try {
+            const luminanceSource = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+            const binaryBitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminanceSource));
+            const result = codeReader.decode(binaryBitmap);
+            if (result) {
+              handleResult(result.getText(), result.getBarcodeFormat());
+            }
+          } catch (e) {
+            // 没识别到就忽略
+          }
+        }
+        requestAnimationFrame(scanFrame);
+      }
+      requestAnimationFrame(scanFrame);
+    }
+
+    function stopScanner() {
+      if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+      videoElem.srcObject = null;
+    }
+
+    document.getElementById('startBtn').onclick = startScanner;
+    document.getElementById('stopBtn').onclick = stopScanner;
+  </script>
+</body>
+</html>
